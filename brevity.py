@@ -2,6 +2,7 @@
 from __future__ import unicode_literals, print_function
 import re
 import sys
+import warnings
 
 if sys.version < '3':
     pass
@@ -136,6 +137,58 @@ def autolink(text):
     return ''.join(result)
 
 
+def truncate_to_nearest_word(text, length):
+    """Truncates text at the nearest word boundary to fit in the given length.
+
+    :param string text: the input text that may be truncated
+
+    :return string: the final, possibly truncated text
+    """
+    # try stripping trailing whitespace first
+    text = text.rstrip()
+    if str_length(text) <= length:
+        return text
+
+    # walk backwards until we find a delimiter
+    for j in xrange(len(text) - 1, -1, -1):
+        if text[j] in DELIMITERS:
+            trunc = text[:j].rstrip(DELIMITERS)
+            if str_length(trunc) <= length:
+                return trunc
+
+    # walk backwards ignoring delimiters
+    for j in xrange(len(text) - 1, -1, -1):
+        trunc = text[:j]
+        if str_length(trunc) <= length:
+            return trunc
+
+    warnings.warn('Failed to truncate text "{}" to {} characters. This indicates a logical error'.format(text, length))
+    return ''
+
+
+def char_length(char):
+    point = ord(char)
+    weight = WEIGHTS['defaultWeight']
+    for range in WEIGHTS['ranges']:
+        if point >= range['start'] and point <= range['end']:
+            weight = range['weight']
+    return weight // WEIGHTS['scale']
+
+
+def str_length(val):
+    return sum(char_length(char) for char in val)
+
+
+def token_length(token, link_length):
+    if token.tag == 'link':
+        return link_length
+    return str_length(token.content)
+
+
+def total_length(tokens, link_length):
+    return sum(token_length(t, link_length) for t in tokens)
+
+
 def shorten(text, permalink=None, permashortlink=None, permashortcitation=None,
             target_length=WEIGHTS['maxWeightedTweetLength'],
             link_length=WEIGHTS['transformedURLLength'],
@@ -175,44 +228,6 @@ def shorten(text, permalink=None, permashortlink=None, permashortcitation=None,
 
     :return string: the final composed text
     """
-    def truncate_to_nearest_word(text, length):
-        # try stripping trailing whitespace first
-        text = text.rstrip()
-        if str_length(text) <= length:
-            return text
-        # walk backwards until we find a delimiter
-        for j in xrange(len(text) - 1, -1, -1):
-            if text[j] in DELIMITERS:
-                trunc = text[:j].rstrip(DELIMITERS)
-                if str_length(trunc) <= length:
-                    return trunc
-        # walk backwards ignoring delimiters
-        for j in xrange(len(text) - 1, -1, -1):
-            trunc = text[:j]
-            if str_length(trunc) <= length:
-                return trunc
-        warnings.warn('Failed to truncate text "{}" to {} characters. This indicates a logical error'.format(text, length))
-        return ''
-
-    def char_length(char):
-        point = ord(char)
-        weight = WEIGHTS['defaultWeight']
-        for range in WEIGHTS['ranges']:
-            if point >= range['start'] and point <= range['end']:
-                weight = range['weight']
-        return weight // WEIGHTS['scale']
-
-    def str_length(val):
-        return sum(char_length(char) for char in val)
-
-    def token_length(token):
-        if token.tag == 'link':
-            return link_length
-        return str_length(token.content)
-
-    def total_length(tokens):
-        return sum(token_length(t) for t in tokens)
-
     tokens = tokenize(text)
 
     citation_tokens = []
@@ -230,8 +245,8 @@ def shorten(text, permalink=None, permashortlink=None, permashortcitation=None,
     if 'media' in format:
         print('Brevity: "media" formatting has been removed; Media attachments no longer count against Twitter\'s character limit (https://dev.twitter.com/overview/api/upcoming-changes-to-tweets)', file=sys.stderr)
 
-    base_length = total_length(tokens)
-    citation_length = total_length(citation_tokens)
+    base_length = total_length(tokens, link_length)
+    citation_length = total_length(citation_tokens, link_length)
 
     if base_length + citation_length <= target_length:
         tokens += citation_tokens
@@ -252,7 +267,7 @@ def shorten(text, permalink=None, permashortlink=None, permashortcitation=None,
             if token.required:
                 continue
 
-            over = total_length(tokens) - target_length
+            over = total_length(tokens, link_length) - target_length
             if over <= 0:
                 # strip trailing whitespace and punctuation on the last token
                 if token.tag == 'text':
@@ -262,7 +277,7 @@ def shorten(text, permalink=None, permashortlink=None, permashortcitation=None,
             if token.tag == 'link':
                 del tokens[ii]
             elif token.tag == 'text':
-                toklen = token_length(token)
+                toklen = token_length(token, link_length)
                 if over >= toklen:
                     del tokens[ii]
                 else:
